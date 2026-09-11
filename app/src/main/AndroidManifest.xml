@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Lets the notification-shade swipe gesture attempt to expand the
+         real system shade. Normal-level permission (auto-granted at
+         install), no runtime prompt — see util/NotificationShadeOpener.kt
+         for the important caveat about why this isn't guaranteed to work
+         on every OEM skin. -->
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+
+    <!-- A launcher's entire job is showing every installed app — querying
+         ACTION_MAIN/CATEGORY_LAUNCHER is technically visibility-exempt on
+         its own, but some OEM builds and Android versions have been
+         inconsistent about honoring that exemption fully. Google Play's
+         policy explicitly carves out an exception to the normal package-
+         visibility restrictions for apps in the launcher/home category,
+         which AuraLauncher is (see the HOME/DEFAULT intent-filter below) —
+         this is the correct, policy-compliant permission for what this
+         app actually is, not a workaround. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.AuraLauncher"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.AuraLauncher"
+            android:stateNotNeeded="true"
+            android:resizeableActivity="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- HOME + DEFAULT is what actually makes Android offer this
+                     as a home-screen replacement when you press the Home
+                     button — without these two it's just a regular app. -->
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Feeds notification-badge dots — see notifications/AuraNotificationListenerService.kt.
+             User must grant Notification Access in system settings; SettingsScreen
+             has a button that deep-links there. -->
+        <service
+            android:name=".notifications.AuraNotificationListenerService"
+            android:exported="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>

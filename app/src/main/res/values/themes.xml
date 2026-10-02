@@ -1,6 +1,12 @@
 <resources>
-    <style name="Theme.AuraLauncher" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
-        <item name="android:colorBackground">@android:color/black</item>
+    <!-- A launcher shows the real system wallpaper through a transparent
+         window (windowShowWallpaper) — reading the wallpaper bitmap instead
+         needs a permission Android 13+ no longer grants to normal apps. -->
+    <style name="Theme.AuraLauncher" parent="android:Theme.Material.Wallpaper.NoTitleBar">
+        <item name="android:windowShowWallpaper">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackgroundCacheHint">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 </resources>

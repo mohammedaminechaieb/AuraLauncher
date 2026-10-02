@@ -29,11 +29,21 @@ class LauncherRepository(private val context: Context) {
 
     fun launchApp(packageName: String) {
         pm.getLaunchIntentForPackage(packageName)?.let { intent ->
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            runCatching { context.startActivity(intent) }
             com.auralauncher.app.prefs.AppUsageTracker(context).recordLaunch(packageName)
         }
     }
+
+    /** Removes every trace of an uninstalled package from the layout. */
+    suspend fun forgetPackage(packageName: String) {
+        dao.removeFromGrid(packageName) // grid + dock (same table)
+        dao.removeFolderMember(packageName)
+        dao.clearIconOverride(packageName)
+    }
+
+    /** Clears per-app shape overrides so the global default applies everywhere. */
+    suspend fun clearAllIconOverrides() = dao.clearAllIconOverrides()
 
     /** Install date, for the drawer's "Recently installed" sort mode. */
     fun installTimeOf(packageName: String): Long =
@@ -60,7 +70,8 @@ class LauncherRepository(private val context: Context) {
     suspend fun placeOnGrid(page: Int, row: Int, col: Int, packageName: String) =
         dao.upsertGridItem(GridItemEntity(page, row, col, packageName))
     suspend fun clearCell(page: Int, row: Int, col: Int) = dao.clearCell(page, row, col)
-    suspend fun removeFromGrid(packageName: String) = dao.removeFromGrid(packageName)
+    /** Removes the app from the home pages (not from the dock). */
+    suspend fun removeFromGrid(packageName: String) = dao.removeFromHomePages(packageName)
 
     // ---- Dock ----
     // Reuses GridItemEntity with page = DOCK_PAGE as a reserved sentinel —
@@ -70,7 +81,7 @@ class LauncherRepository(private val context: Context) {
     fun observeDockItems() = dao.observeGridItems(DOCK_PAGE)
     suspend fun placeInDock(slot: Int, packageName: String) =
         dao.upsertGridItem(GridItemEntity(DOCK_PAGE, 0, slot, packageName))
-    suspend fun removeFromDock(packageName: String) = dao.removeFromGrid(packageName)
+    suspend fun removeDockSlot(packageName: String) = dao.removeFromPage(packageName, DOCK_PAGE)
 
     companion object {
         const val DOCK_PAGE = -1
@@ -104,8 +115,8 @@ class LauncherRepository(private val context: Context) {
      *  dropped-on cell — this is what dragging app A onto app B does. */
     suspend fun createFolderFromApps(page: Int, row: Int, col: Int, draggedPackage: String, targetPackage: String): Long {
         val folderId = dao.upsertFolder(FolderEntity(page = page, row = row, col = col, name = "Folder"))
-        dao.removeFromGrid(draggedPackage)
-        dao.removeFromGrid(targetPackage)
+        dao.removeFromHomePages(draggedPackage)
+        dao.removeFromHomePages(targetPackage)
         dao.upsertFolderMember(FolderMemberEntity(draggedPackage, folderId))
         dao.upsertFolderMember(FolderMemberEntity(targetPackage, folderId))
         return folderId
@@ -113,7 +124,7 @@ class LauncherRepository(private val context: Context) {
 
     /** Drops an app into an EXISTING folder (dragged onto an already-formed folder icon). */
     suspend fun addAppToFolder(folderId: Long, packageName: String) {
-        dao.removeFromGrid(packageName)
+        dao.removeFromHomePages(packageName)
         dao.upsertFolderMember(FolderMemberEntity(packageName, folderId))
     }
 
@@ -124,6 +135,9 @@ class LauncherRepository(private val context: Context) {
     }
 
     suspend fun renameFolder(folder: FolderEntity, newName: String) = dao.updateFolder(folder.copy(name = newName))
+
+    suspend fun moveFolder(folder: FolderEntity, page: Int, row: Int, col: Int) =
+        dao.updateFolder(folder.copy(page = page, row = row, col = col))
 
     /** Deletes the folder and scatters its members back onto the grid at
      *  whichever free cells the caller found for them (see HomeScreen —

@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +38,7 @@ fun SettingsScreen(
 
     var columns by remember { mutableStateOf(settings.columns) }
     var rows by remember { mutableStateOf(settings.rows) }
+    var pages by remember { mutableStateOf(settings.pageCount) }
     var iconSize by remember { mutableStateOf(settings.iconSizeDp) }
     var showLabels by remember { mutableStateOf(settings.showLabels) }
     var swipeUp by remember { mutableStateOf(settings.swipeUpAction) }
@@ -52,7 +53,7 @@ fun SettingsScreen(
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("Home settings") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } }
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } }
         )
     }) { padding ->
         Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).fillMaxSize()) {
@@ -71,6 +72,7 @@ fun SettingsScreen(
             SettingsSection("Home screen grid") {
                 SettingsStepper("Columns", columns, 3, 6) { columns = it; settings.columns = it }
                 SettingsStepper("Rows", rows, 4, 7) { rows = it; settings.rows = it }
+                SettingsStepper("Pages", pages, 1, 5) { pages = it; settings.pageCount = it }
                 ListItem(
                     headlineContent = { Text("Icon size") },
                     supportingContent = {
@@ -96,7 +98,7 @@ fun SettingsScreen(
             SettingsSection("Dock") {
                 SettingsStepper("Dock slots", dockSlots, 3, 6) { dockSlots = it; settings.dockSlots = it }
                 Text(
-                    "Add apps to the dock by long-pressing them in the app drawer.",
+                    "Add apps to the dock by holding them on the home screen or in the app drawer.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
@@ -135,7 +137,7 @@ fun SettingsScreen(
             }
 
             SettingsSection("Personalization") {
-                ListItem(headlineContent = { Text("Icon theme") }, supportingContent = { Text("Shapes, or import a real icon pack") }, modifier = Modifier.clickableRow(onOpenIconTheme))
+                ListItem(headlineContent = { Text("Icon theme") }, supportingContent = { Text("Icon shape and icon packs") }, modifier = Modifier.clickableRow(onOpenIconTheme))
                 ListItem(
                     headlineContent = { Text("Wallpaper") },
                     supportingContent = { Text("Opens the system wallpaper picker") },
@@ -179,7 +181,7 @@ private fun SettingsSection(title: String, content: @Composable ColumnScope.() -
     Column(Modifier.padding(top = 12.dp)) {
         Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         content()
-        Divider(Modifier.padding(top = 8.dp))
+        HorizontalDivider(Modifier.padding(top = 8.dp))
     }
 }
 

@@ -22,6 +22,13 @@ interface LauncherDao {
     @Query("DELETE FROM grid_items WHERE packageName = :packageName")
     suspend fun removeFromGrid(packageName: String)
 
+    /** Home pages only — leaves the app's dock slot (page -1) alone. */
+    @Query("DELETE FROM grid_items WHERE packageName = :packageName AND page >= 0")
+    suspend fun removeFromHomePages(packageName: String)
+
+    @Query("DELETE FROM grid_items WHERE packageName = :packageName AND page = :page")
+    suspend fun removeFromPage(packageName: String, page: Int)
+
     // ---- Focus modes ----
     @Query("SELECT * FROM focus_modes")
     fun observeFocusModes(): Flow<List<FocusModeEntity>>

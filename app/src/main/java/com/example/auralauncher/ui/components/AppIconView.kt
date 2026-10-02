@@ -18,7 +18,7 @@ import com.auralauncher.app.data.IconShape
 
 @Composable
 fun AppIconView(icon: Drawable, shape: IconShape, sizeDp: Int = 56, isPreShaped: Boolean = false) {
-    val bitmap = remember(icon) { icon.toBitmap(width = 128, height = 128).asImageBitmap() }
+    val bitmap = remember(icon) { IconBitmapCache.get(icon) }
 
     // isPreShaped = true for real icon-pack artwork (see iconpack/IconPackManager.kt) —
     // those images already have their own background/shape baked in by the

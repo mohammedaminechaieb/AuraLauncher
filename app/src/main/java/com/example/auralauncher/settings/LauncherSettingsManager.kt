@@ -1,6 +1,7 @@
 package com.auralauncher.app.settings
 
 import android.content.Context
+import com.auralauncher.app.data.IconShape
 import org.json.JSONObject
 
 enum class GestureAction(val label: String) {
@@ -80,6 +81,27 @@ class LauncherSettingsManager(context: Context) {
         get() = prefs.getBoolean("show_notification_badges", true)
         set(value) = prefs.edit().putBoolean("show_notification_badges", value).apply()
 
+    /** Number of swipeable home pages. */
+    var pageCount: Int
+        get() = prefs.getInt("page_count", 3)
+        set(value) = prefs.edit().putInt("page_count", value.coerceIn(1, 5)).apply()
+
+    /** Shape applied to every icon that has no per-app override. */
+    var iconShape: IconShape
+        get() = runCatching { IconShape.valueOf(prefs.getString("icon_shape", null) ?: "") }.getOrDefault(IconShape.SYSTEM_DEFAULT)
+        set(value) = prefs.edit().putString("icon_shape", value.name).apply()
+
+    /** Set once the first-run layout has been created, so emptying the grid
+     *  on purpose doesn't make it refill itself on the next launch. */
+    var gridSeeded: Boolean
+        get() = prefs.getBoolean("grid_seeded", false)
+        set(value) = prefs.edit().putBoolean("grid_seeded", value).apply()
+
+    /** First-run "how to use" card on the home screen. */
+    var homeHintDismissed: Boolean
+        get() = prefs.getBoolean("home_hint_dismissed", false)
+        set(value) = prefs.edit().putBoolean("home_hint_dismissed", value).apply()
+
     /** Auto-seed on a fresh grid fills at most this many cells, leaving
      *  real empty space for widgets and manual arrangement rather than
      *  packing every cell on every page — see HomeScreen's seeding call. */
@@ -95,6 +117,7 @@ class LauncherSettingsManager(context: Context) {
         put("showLabels", showLabels); put("swipeUpAction", swipeUpAction.name); put("swipeDownAction", swipeDownAction.name)
         put("dockSlots", dockSlots); put("drawerSortMode", drawerSortMode.name); put("drawerViewMode", drawerViewMode.name)
         put("showHomeSearchBar", showHomeSearchBar); put("hideStatusBar", hideStatusBar); put("showNotificationBadges", showNotificationBadges)
+        put("pageCount", pageCount); put("iconShape", iconShape.name)
     }
 
     fun applyFromJson(json: JSONObject) {
@@ -110,5 +133,7 @@ class LauncherSettingsManager(context: Context) {
         showHomeSearchBar = json.optBoolean("showHomeSearchBar", showHomeSearchBar)
         hideStatusBar = json.optBoolean("hideStatusBar", hideStatusBar)
         showNotificationBadges = json.optBoolean("showNotificationBadges", showNotificationBadges)
+        pageCount = json.optInt("pageCount", pageCount)
+        iconShape = runCatching { IconShape.valueOf(json.getString("iconShape")) }.getOrDefault(iconShape)
     }
 }

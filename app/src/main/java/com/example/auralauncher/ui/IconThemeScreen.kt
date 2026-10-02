@@ -5,22 +5,24 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.auralauncher.app.data.AppListStore
 import com.auralauncher.app.data.IconShape
 import com.auralauncher.app.data.LauncherRepository
 import com.auralauncher.app.iconpack.IconPackManager
 import com.auralauncher.app.iconpack.IconPackScanner
-import com.auralauncher.app.iconpack.InstalledIconPack
+import com.auralauncher.app.settings.LauncherSettingsManager
 import com.auralauncher.app.ui.components.AppIconView
 import kotlinx.coroutines.launch
 
-private val shapeLabels = mapOf(
-    IconShape.SYSTEM_DEFAULT to "System default (each app's own adaptive icon)",
+private val shapeLabels = linkedMapOf(
+    IconShape.SYSTEM_DEFAULT to "System default",
     IconShape.CIRCLE to "Circle",
     IconShape.SQUIRCLE to "Squircle",
     IconShape.ROUNDED_SQUARE to "Rounded square",
@@ -28,127 +30,83 @@ private val shapeLabels = mapOf(
 )
 
 /**
- * Two independent theming layers, in the order most icon-pack-aware
- * launchers present them:
- *   1. Icon pack — real third-party artwork, read from an installed
- *      pack's own appfilter.xml (see iconpack/IconPackParser.kt). Only
- *      covers apps the pack's designer specifically included icons for.
- *   2. Shape theming — the fallback for everything the pack didn't
- *      cover, or the whole-device look if no pack is selected at all.
- * Both apply live on the home grid; picking a pack doesn't require
- * "Apply to all apps" the way shape does, since the icon-pack lookup
- * happens per-app at render time rather than being baked into the DB.
+ * Two theming layers: an icon pack (real third-party artwork from the
+ * pack's appfilter.xml), and a shape that applies to every icon the pack
+ * doesn't cover. Both apply instantly — no "Apply" step.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun IconThemeScreen(repository: LauncherRepository, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val iconPackManager = remember { IconPackManager(context) }
+    val settings = remember { LauncherSettingsManager(context) }
 
-    var selectedShape by remember { mutableStateOf(IconShape.SYSTEM_DEFAULT) }
+    var selectedShape by remember { mutableStateOf(settings.iconShape) }
     var selectedPack by remember { mutableStateOf(iconPackManager.selectedPackage) }
     val installedPacks = remember { IconPackScanner.findInstalledIconPacks(context) }
-    val previewApps = remember { repository.loadAllApps().take(4) }
+    val apps by AppListStore.get(context).apps.collectAsState()
+    val previewApps = remember(apps) { apps.orEmpty().take(5) }
+    val overrides by repository.observeIconOverrides().collectAsState(initial = emptyList())
 
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("Icon theme") },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } }
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } }
         )
     }) { padding ->
         Column(Modifier.padding(padding).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState())) {
-            Text("Preview", style = MaterialTheme.typography.titleSmall)
-            Row(Modifier.padding(vertical = 12.dp)) {
-                previewApps.forEach { app ->
-                    Box(Modifier.padding(end = 12.dp)) {
+            Card {
+                Row(Modifier.fillMaxWidth().padding(vertical = 20.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    previewApps.forEach { app ->
                         val packIcon = remember(selectedPack, app.packageName) { iconPackManager.resolveIcon(app) }
-                        if (packIcon != null) {
-                            AppIconView(icon = packIcon, shape = selectedShape, sizeDp = 48, isPreShaped = true)
-                        } else {
-                            AppIconView(icon = app.icon, shape = selectedShape, sizeDp = 48)
-                        }
+                        if (packIcon != null) AppIconView(icon = packIcon, shape = selectedShape, sizeDp = 48, isPreShaped = true)
+                        else AppIconView(icon = app.icon, shape = selectedShape, sizeDp = 48)
                     }
                 }
             }
 
-            Divider()
-            Text("Icon pack", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp))
+            Text("Shape", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                shapeLabels.forEach { (shape, label) ->
+                    FilterChip(
+                        selected = selectedShape == shape,
+                        onClick = { selectedShape = shape; settings.iconShape = shape },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            if (overrides.isNotEmpty()) {
+                TextButton(onClick = { scope.launch { repository.clearAllIconOverrides() } }) {
+                    Text("Reset ${overrides.size} app-specific shape${if (overrides.size == 1) "" else "s"}")
+                }
+            }
 
+            Text("Icon pack", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
             if (installedPacks.isEmpty()) {
                 Text(
-                    "No icon pack apps detected on this device. Install one from the Play Store " +
-                        "(e.g. search \"icon pack\") and it'll show up here automatically.",
+                    "No icon packs installed. Install one from the Play Store (search \"icon pack\") and it'll appear here automatically.",
                     style = MaterialTheme.typography.bodySmall
                 )
             } else {
-                Row(
-                    Modifier.fillMaxWidth().selectable(selected = selectedPack == null) {
-                        selectedPack = null
-                        iconPackManager.selectedPackage = null
-                    }.padding(vertical = 8.dp)
-                ) {
-                    RadioButton(selected = selectedPack == null, onClick = {
-                        selectedPack = null
-                        iconPackManager.selectedPackage = null
-                    })
-                    Spacer(Modifier.width(12.dp))
-                    Text("None — use shape theming only")
-                }
-
-                installedPacks.forEach { pack: InstalledIconPack ->
+                (listOf<Pair<String?, String>>(null to "None — use shapes only") + installedPacks.map { it.packageName to it.label }).forEach { (pkg, label) ->
                     Row(
-                        Modifier.fillMaxWidth().selectable(selected = selectedPack == pack.packageName) {
-                            selectedPack = pack.packageName
-                            iconPackManager.selectedPackage = pack.packageName
-                        }.padding(vertical = 8.dp)
+                        Modifier
+                            .fillMaxWidth()
+                            .selectable(selected = selectedPack == pkg) { selectedPack = pkg; iconPackManager.selectedPackage = pkg }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        RadioButton(selected = selectedPack == pack.packageName, onClick = {
-                            selectedPack = pack.packageName
-                            iconPackManager.selectedPackage = pack.packageName
-                        })
+                        RadioButton(selected = selectedPack == pkg, onClick = null)
                         Spacer(Modifier.width(12.dp))
-                        Text(pack.label)
+                        Text(label)
                     }
                 }
-
                 Text(
-                    "Only apps the pack's designer specifically included icons for will use its artwork " +
-                        "— everything else falls back to shape theming below.",
+                    "Apps the pack doesn't include an icon for use the shape above.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-
-            Divider(Modifier.padding(top = 16.dp))
-            Text("Shape (fallback / whole-device if no pack selected)", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp))
-
-            shapeLabels.forEach { (shape, label) ->
-                Row(
-                    Modifier.fillMaxWidth().selectable(selected = selectedShape == shape) {
-                        selectedShape = shape
-                    }.padding(vertical = 12.dp)
-                ) {
-                    RadioButton(selected = selectedShape == shape, onClick = { selectedShape = shape })
-                    Spacer(Modifier.width(12.dp))
-                    Text(label)
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            Button(
-                onClick = {
-                    scope.launch {
-                        repository.loadAllApps().forEach { app ->
-                            repository.setIconOverride(app.packageName, selectedShape)
-                        }
-                    }
-                    onBack()
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Apply shape to all apps") }
-
-            Spacer(Modifier.height(8.dp))
         }
     }
 }

@@ -10,6 +10,12 @@ import android.os.Build
 import android.os.Bundle
 import android.text.TextUtils
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.lifecycle.lifecycleScope
+import com.auralauncher.app.data.AppListStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,6 +43,14 @@ import org.json.JSONObject
 
 private enum class Screen { HOME, DRAWER, ICON_THEME, FOCUS_MODES, HIDDEN_APPS, SETTINGS }
 
+/** Where Back goes from each screen (HOME has nowhere to go — a launcher's root). */
+private fun Screen.parent(hiddenAppsFrom: Screen): Screen? = when (this) {
+    Screen.HOME -> null
+    Screen.DRAWER, Screen.SETTINGS -> Screen.HOME
+    Screen.ICON_THEME, Screen.FOCUS_MODES -> Screen.SETTINGS
+    Screen.HIDDEN_APPS -> hiddenAppsFrom
+}
+
 /** What cell a widget-in-progress should land on once the pick/configure
  *  flow finishes — captured right before launching the system picker. */
 private data class PendingWidgetPlacement(val page: Int, val row: Int, val col: Int)
@@ -46,23 +60,35 @@ class MainActivity : ComponentActivity() {
     private lateinit var widgetHost: AuraWidgetHost
     private lateinit var settings: LauncherSettingsManager
 
+    // Hoisted out of Compose so onNewIntent (Home button) can reset it.
+    private var screen by mutableStateOf(Screen.HOME)
+    private var hiddenAppsFrom by mutableStateOf(Screen.DRAWER)
+    private var drawerFocusSearch by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         super.onCreate(savedInstanceState)
         val repository = LauncherRepository(applicationContext)
         widgetHost = AuraWidgetHost(applicationContext)
         settings = LauncherSettingsManager(applicationContext)
-        val scope = kotlinx.coroutines.MainScope()
-
-        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                // No-op on purpose — a launcher's own home screen has nowhere to send Back.
-            }
-        })
+        AppListStore.get(applicationContext) // start loading the app list right away
+        val scope = lifecycleScope
 
         setContent {
-            MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    var screen by remember { mutableStateOf(Screen.HOME) }
+            val colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                dynamicDarkColorScheme(this)
+            } else {
+                androidx.compose.material3.darkColorScheme()
+            }
+            MaterialTheme(colorScheme = colorScheme) {
+                // Transparent so the home screen shows the real wallpaper the
+                // window draws behind it; other screens paint their own background.
+                Surface(modifier = Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.Transparent) {
+                    val parent = screen.parent(hiddenAppsFrom)
+                    BackHandler(enabled = true) { parent?.let { screen = it } }
                     var isDefaultLauncher by remember { mutableStateOf(isDefaultLauncher()) }
                     var hasNotificationAccess by remember { mutableStateOf(hasNotificationAccess()) }
                     var pendingPlacement by remember { mutableStateOf<PendingWidgetPlacement?>(null) }
@@ -177,15 +203,16 @@ class MainActivity : ComponentActivity() {
                             isDefaultLauncher = isDefaultLauncher,
                             onRequestDefaultLauncher = { requestDefaultLauncher(roleLauncher) },
                             onAddWidgetRequested = { page, row, col -> startAddWidgetFlow(page, row, col) },
-                            onOpenDrawer = { screen = Screen.DRAWER },
+                            onOpenDrawer = { focus -> drawerFocusSearch = focus; screen = Screen.DRAWER },
                             onOpenSettings = { screen = Screen.SETTINGS }
                         )
                         Screen.DRAWER -> AppDrawerScreen(
                             repository = repository,
-                            onOpenHiddenApps = { screen = Screen.HIDDEN_APPS },
+                            focusSearch = drawerFocusSearch,
+                            onOpenHiddenApps = { hiddenAppsFrom = Screen.DRAWER; screen = Screen.HIDDEN_APPS },
                             onBack = { screen = Screen.HOME }
                         )
-                        Screen.HIDDEN_APPS -> HiddenAppsScreen(repository = repository, onBack = { screen = Screen.DRAWER })
+                        Screen.HIDDEN_APPS -> HiddenAppsScreen(repository = repository, onBack = { screen = hiddenAppsFrom })
                         Screen.ICON_THEME -> IconThemeScreen(repository = repository, onBack = { screen = Screen.SETTINGS })
                         Screen.FOCUS_MODES -> FocusModeScreen(repository = repository, onBack = { screen = Screen.SETTINGS })
                         Screen.SETTINGS -> SettingsScreen(
@@ -196,7 +223,7 @@ class MainActivity : ComponentActivity() {
                             onRequestNotificationAccess = { notificationAccessLauncher.launch(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
                             onOpenIconTheme = { screen = Screen.ICON_THEME },
                             onOpenFocusModes = { screen = Screen.FOCUS_MODES },
-                            onOpenHiddenApps = { screen = Screen.HIDDEN_APPS },
+                            onOpenHiddenApps = { hiddenAppsFrom = Screen.SETTINGS; screen = Screen.HIDDEN_APPS },
                             onExportBackup = { exportLauncher.launch("auralauncher_backup.json") },
                             onImportBackup = { importLauncher.launch(arrayOf("application/json")) },
                             onBack = { screen = Screen.HOME }
@@ -204,6 +231,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    /** Pressing Home while AuraLauncher is already the foreground launcher
+     *  delivers a new HOME intent here — go back to the home screen, like
+     *  every launcher does (the old version stayed stuck in the drawer). */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) {
+            screen = Screen.HOME
         }
     }
 
@@ -250,7 +287,6 @@ class MainActivity : ComponentActivity() {
         launcher.launch(Intent(android.provider.Settings.ACTION_HOME_SETTINGS))
     }
 
-    @RequiresApi(Build.VERSION_CODES.CUPCAKE)
     private fun hasNotificationAccess(): Boolean {
         val expected = "$packageName/.notifications.AuraNotificationListenerService"
         val enabled = android.provider.Settings.Secure.getString(contentResolver, "enabled_notification_listeners") ?: return false

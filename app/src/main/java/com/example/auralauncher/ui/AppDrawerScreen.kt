@@ -2,34 +2,44 @@ package com.auralauncher.app.ui
 
 import android.content.pm.ApplicationInfo
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.Sort
-import androidx.compose.material.icons.filled.ViewList
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.auralauncher.app.data.AppInfo
-import com.auralauncher.app.data.IconShape
+import com.auralauncher.app.data.AppListStore
 import com.auralauncher.app.data.LauncherRepository
 import com.auralauncher.app.iconpack.IconPackManager
 import com.auralauncher.app.notifications.AuraNotificationListenerService
@@ -39,21 +49,14 @@ import com.auralauncher.app.settings.DrawerSortMode
 import com.auralauncher.app.settings.DrawerViewMode
 import com.auralauncher.app.settings.LauncherSettingsManager
 import com.auralauncher.app.shortcuts.AppShortcutsHelper
+import com.auralauncher.app.ui.components.AppActionsSheet
 import com.auralauncher.app.ui.components.AppIconView
 import com.auralauncher.app.ui.components.BadgedIcon
 import kotlinx.coroutines.launch
 
-/** Groups Android's raw ApplicationInfo.CATEGORY_* constants into a small,
- *  human-friendly tab set — matching the level of grouping Smart Launcher's
- *  category tabs use, rather than exposing all ~10 raw platform categories
- *  (most of which are rare in practice and would make for mostly-empty tabs). */
+/** Android's raw ApplicationInfo.CATEGORY_* constants grouped into a small tab set. */
 private enum class DrawerTab(val label: String) {
-    ALL("All"),
-    GAMES("Games"),
-    SOCIAL("Social"),
-    PRODUCTIVITY("Work"),
-    MEDIA("Media"),
-    OTHER("Other")
+    ALL("All"), GAMES("Games"), SOCIAL("Social"), PRODUCTIVITY("Work"), MEDIA("Media"), OTHER("Other")
 }
 
 private fun categoryToTab(category: Int): DrawerTab = when (category) {
@@ -66,9 +69,10 @@ private fun categoryToTab(category: Int): DrawerTab = when (category) {
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun AppDrawerScreen(repository: LauncherRepository, onOpenHiddenApps: () -> Unit, onBack: () -> Unit) {
+fun AppDrawerScreen(repository: LauncherRepository, focusSearch: Boolean, onOpenHiddenApps: () -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     val iconPackManager = remember { IconPackManager(context) }
     val hiddenAppsManager = remember { HiddenAppsManager(context) }
     val shortcutsHelper = remember { AppShortcutsHelper(context) }
@@ -76,18 +80,28 @@ fun AppDrawerScreen(repository: LauncherRepository, onOpenHiddenApps: () -> Unit
     val settings = remember { LauncherSettingsManager(context) }
     val activeNotificationPackages by AuraNotificationListenerService.activePackages.collectAsState()
     val showBadges = settings.showNotificationBadges
+    val globalShape = settings.iconShape
 
-    val allApps = remember { repository.loadAllApps() }
+    val apps by AppListStore.get(context).apps.collectAsState()
+    val allApps = apps.orEmpty()
     val gridItems by repository.observeAllGridItems().collectAsState(initial = emptyList())
-    val dockItems by repository.observeDockItems().collectAsState(initial = emptyList())
     val hostedWidgets by repository.observeAllHostedWidgets().collectAsState(initial = emptyList())
-    val onGrid = remember(gridItems) { gridItems.map { it.packageName }.toSet() }
+    val folders by repository.observeAllFolders().collectAsState(initial = emptyList())
+    val folderMembers by repository.observeAllFolderMembers().collectAsState(initial = emptyList())
+    val iconOverrides by repository.observeIconOverrides().collectAsState(initial = emptyList())
+    val onHome = remember(gridItems, folderMembers) {
+        gridItems.filter { it.page != LauncherRepository.DOCK_PAGE }.map { it.packageName }.toSet() + folderMembers.map { it.packageName }
+    }
+    val dockItems = remember(gridItems) { gridItems.filter { it.page == LauncherRepository.DOCK_PAGE } }
 
     var query by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(DrawerTab.ALL) }
     var sortMode by remember { mutableStateOf(settings.drawerSortMode) }
     var viewMode by remember { mutableStateOf(settings.drawerViewMode) }
-    val hiddenSet = remember(query) { hiddenAppsManager.getHiddenPackages() }
+    var hiddenSet by remember { mutableStateOf(hiddenAppsManager.getHiddenPackages()) }
+    var actionsFor by remember { mutableStateOf<AppInfo?>(null) }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(focusSearch) { if (focusSearch) focusRequester.requestFocus() }
 
     val availableTabs = remember(allApps) {
         val present = allApps.map { categoryToTab(it.category) }.toSet()
@@ -97,14 +111,16 @@ fun AppDrawerScreen(repository: LauncherRepository, onOpenHiddenApps: () -> Unit
     val filtered = remember(query, allApps, hiddenSet, selectedTab, sortMode) {
         val base = allApps.filter {
             it.packageName !in hiddenSet &&
-                (query.isBlank() || it.label.contains(query, ignoreCase = true)) &&
+                (query.isBlank() || it.label.contains(query.trim(), ignoreCase = true)) &&
                 (selectedTab == DrawerTab.ALL || categoryToTab(it.category) == selectedTab)
         }
-        when (sortMode) {
+        val sorted = when (sortMode) {
             DrawerSortMode.ALPHABETICAL -> base.sortedBy { it.label.lowercase() }
             DrawerSortMode.MOST_USED -> base.sortedByDescending { usageTracker.launchCount(it.packageName) }
             DrawerSortMode.RECENTLY_INSTALLED -> base.sortedByDescending { repository.installTimeOf(it.packageName) }
         }
+        // While searching, names that START with the query rank first.
+        if (query.isBlank()) sorted else sorted.sortedByDescending { it.label.startsWith(query.trim(), ignoreCase = true) }
     }
 
     val shortcutResults = remember(query, filtered) {
@@ -112,196 +128,163 @@ fun AppDrawerScreen(repository: LauncherRepository, onOpenHiddenApps: () -> Unit
         else filtered.take(5).flatMap { app -> shortcutsHelper.shortcutsFor(app.packageName).map { app to it } }
     }
 
-    var addCandidate by remember { mutableStateOf<String?>(null) }
+    fun launch(app: AppInfo) {
+        repository.launchApp(app.packageName)
+        onBack()
+    }
 
-    Surface(color = Color(0xFF0E0E14), modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            containerColor = Color.Transparent,
-            topBar = {
-                Column {
-                    TopAppBar(
-                        title = {
-                            OutlinedTextField(
-                                value = query,
-                                onValueChange = { query = it },
-                                placeholder = { Text("Search apps") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        },
-                        navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) } },
-                        actions = {
-                            IconButton(onClick = { viewMode = if (viewMode == DrawerViewMode.LIST) DrawerViewMode.GRID else DrawerViewMode.LIST; settings.drawerViewMode = viewMode }) {
-                                Icon(
-                                    if (viewMode == DrawerViewMode.LIST) androidx.compose.material.icons.Icons.Default.GridView else androidx.compose.material.icons.Icons.Default.ViewList,
-                                    contentDescription = "Toggle view"
-                                )
-                            }
-                            SortMenuButton(current = sortMode) { sortMode = it; settings.drawerSortMode = it }
-                            IconButton(onClick = onOpenHiddenApps) { Icon(Icons.Default.VisibilityOff, contentDescription = "Hidden apps") }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                    )
-                    if (availableTabs.size > 1) {
-                        ScrollableTabRow(
-                            selectedTabIndex = availableTabs.indexOf(selectedTab).coerceAtLeast(0),
-                            containerColor = Color.Transparent,
-                            edgePadding = 12.dp
-                        ) {
-                            availableTabs.forEach { tab ->
-                                Tab(selected = selectedTab == tab, onClick = { selectedTab = tab }, text = { Text(tab.label) })
-                            }
-                        }
-                    }
+    fun longPress(app: AppInfo) {
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        actionsFor = app
+    }
+
+    Surface(color = Color(0xF20E0E14), contentColor = Color.White, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            // Search bar + actions
+            Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search apps", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Clear") } },
+                    singleLine = true,
+                    shape = RoundedCornerShape(28.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { filtered.firstOrNull()?.let { launch(it) } }),
+                    modifier = Modifier.weight(1f).focusRequester(focusRequester)
+                )
+                IconButton(onClick = {
+                    viewMode = if (viewMode == DrawerViewMode.LIST) DrawerViewMode.GRID else DrawerViewMode.LIST
+                    settings.drawerViewMode = viewMode
+                }) {
+                    Icon(if (viewMode == DrawerViewMode.LIST) Icons.Default.GridView else Icons.AutoMirrored.Filled.ViewList, "Toggle view")
+                }
+                SortMenuButton(current = sortMode) { sortMode = it; settings.drawerSortMode = it }
+                IconButton(onClick = onOpenHiddenApps) { Icon(Icons.Default.VisibilityOff, "Hidden apps") }
+            }
+            if (availableTabs.size > 1 && query.isBlank()) {
+                ScrollableTabRow(
+                    selectedTabIndex = availableTabs.indexOf(selectedTab).coerceAtLeast(0),
+                    containerColor = Color.Transparent,
+                    contentColor = Color.White,
+                    edgePadding = 12.dp
+                ) {
+                    availableTabs.forEach { tab -> Tab(selected = selectedTab == tab, onClick = { selectedTab = tab }, text = { Text(tab.label) }) }
                 }
             }
-        ) { padding ->
-            if (filtered.isEmpty() && shortcutResults.isEmpty()) {
-                Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+
+            when {
+                apps == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                filtered.isEmpty() && shortcutResults.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(if (query.isBlank()) "No apps in this category" else "No apps match \"$query\"", color = Color.Gray)
                 }
-                return@Scaffold
-            }
-
-            if (viewMode == DrawerViewMode.GRID) {
-                LazyVerticalGrid(columns = GridCells.Fixed(4), modifier = Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(12.dp)) {
+                viewMode == DrawerViewMode.GRID -> LazyVerticalGrid(
+                    columns = GridCells.Adaptive(84.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp)
+                ) {
+                    if (shortcutResults.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) { ShortcutResults(shortcutResults, shortcutsHelper) }
+                    }
                     items(filtered, key = { it.packageName }) { app ->
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
-                                .padding(8.dp)
-                                .combinedClickable(
-                                    onClick = { repository.launchApp(app.packageName) },
-                                    onLongClick = { addCandidate = app.packageName }
-                                )
+                                .padding(4.dp)
+                                .combinedClickable(onClick = { launch(app) }, onLongClick = { longPress(app) })
+                                .padding(vertical = 8.dp)
                         ) {
-                            val packIcon = remember(app.packageName) { iconPackManager.resolveIcon(app) }
-                            BadgedIcon(show = showBadges && app.packageName in activeNotificationPackages) {
-                                if (packIcon != null) {
-                                    AppIconView(icon = packIcon, shape = IconShape.SYSTEM_DEFAULT, sizeDp = 48, isPreShaped = true)
-                                } else {
-                                    AppIconView(icon = app.icon, shape = IconShape.SYSTEM_DEFAULT, sizeDp = 48)
-                                }
-                            }
-                            Text(app.label, style = MaterialTheme.typography.labelSmall, color = Color.White, maxLines = 1, textAlign = TextAlign.Center)
+                            DrawerIcon(app, 52, iconPackManager, shapeFor(app.packageName, iconOverrides, globalShape), showBadges && app.packageName in activeNotificationPackages)
+                            Spacer(Modifier.height(6.dp))
+                            Text(app.label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                         }
                     }
                 }
-            } else {
-                LazyColumn(Modifier.padding(padding).fillMaxSize()) {
-                    if (shortcutResults.isNotEmpty()) {
-                        item {
-                            Text("Actions", style = MaterialTheme.typography.labelMedium, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                        }
-                        items(shortcutResults, key = { (app, shortcut) -> "${app.packageName}/${shortcut.id}" }) { (app, shortcut) ->
-                            ListItem(
-                                leadingContent = {
-                                    val bitmap = remember(shortcut.id) { shortcut.icon?.toBitmap(width = 96, height = 96)?.asImageBitmap() }
-                                    if (bitmap != null) {
-                                        androidx.compose.foundation.Image(painter = BitmapPainter(bitmap), contentDescription = null, modifier = Modifier.size(32.dp))
-                                    }
-                                },
-                                headlineContent = { Text(shortcut.label) },
-                                supportingContent = { Text(app.label, style = MaterialTheme.typography.bodySmall) },
-                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                                modifier = Modifier.combinedClickable(onClick = { shortcutsHelper.launch(shortcut) })
-                            )
-                        }
-                        item { Divider(Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.1f)) }
-                    }
-
+                else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+                    if (shortcutResults.isNotEmpty()) item { ShortcutResults(shortcutResults, shortcutsHelper) }
                     items(filtered, key = { it.packageName }) { app ->
                         ListItem(
                             leadingContent = {
-                                val packIcon = remember(app.packageName) { iconPackManager.resolveIcon(app) }
-                                BadgedIcon(show = showBadges && app.packageName in activeNotificationPackages) {
-                                    if (packIcon != null) {
-                                        AppIconView(icon = packIcon, shape = IconShape.SYSTEM_DEFAULT, sizeDp = 40, isPreShaped = true)
-                                    } else {
-                                        AppIconView(icon = app.icon, shape = IconShape.SYSTEM_DEFAULT, sizeDp = 40)
-                                    }
-                                }
+                                DrawerIcon(app, 42, iconPackManager, shapeFor(app.packageName, iconOverrides, globalShape), showBadges && app.packageName in activeNotificationPackages)
                             },
                             headlineContent = { Text(app.label) },
-                            supportingContent = { if (app.packageName in onGrid) Text("On home screen", color = Color.Gray) },
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            modifier = Modifier.combinedClickable(
-                                onClick = { repository.launchApp(app.packageName) },
-                                onLongClick = { addCandidate = app.packageName }
-                            )
+                            supportingContent = { if (app.packageName in onHome) Text("On home screen", color = Color.Gray) },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent, headlineColor = Color.White),
+                            modifier = Modifier.combinedClickable(onClick = { launch(app) }, onLongClick = { longPress(app) })
                         )
-                        Divider(color = Color.White.copy(alpha = 0.08f))
                     }
                 }
             }
         }
     }
 
-    addCandidate?.let { pkg ->
-        val app = allApps.first { it.packageName == pkg }
-        val dockFull = dockItems.size >= settings.dockSlots
-        AlertDialog(
-            onDismissRequest = { addCandidate = null },
-            title = { Text(app.label) },
-            text = {
-                Column {
-                    ListItem(
-                        headlineContent = { Text("Add to home screen") },
-                        modifier = Modifier.combinedClickable(onClick = {
-                            scope.launch {
-                                val widgetCells = hostedWidgets.flatMap { w ->
-                                    (w.row until w.row + w.spanRows).flatMap { r -> (w.col until w.col + w.spanCols).map { c -> Triple(w.page, r, c) } }
-                                }
-                                val occupied = gridItems.map { Triple(it.page, it.row, it.col) } + widgetCells
-                                val placement = findFirstFreeCell(occupied)
-                                if (placement != null) repository.placeOnGrid(placement.first, placement.second, placement.third, pkg)
-                            }
-                            addCandidate = null
-                        })
-                    )
-                    ListItem(
-                        headlineContent = { Text(if (dockFull) "Add to dock (dock is full)" else "Add to dock") },
-                        modifier = Modifier.combinedClickable(onClick = {
-                            if (!dockFull) {
-                                val usedSlots = dockItems.map { it.col }.toSet()
-                                val freeSlot = (0 until settings.dockSlots).firstOrNull { it !in usedSlots }
-                                if (freeSlot != null) scope.launch { repository.placeInDock(freeSlot, pkg) }
-                            }
-                            addCandidate = null
-                        })
-                    )
+    actionsFor?.let { app ->
+        val pkg = app.packageName
+        val freeDockSlot = (0 until settings.dockSlots).firstOrNull { slot -> dockItems.none { it.col == slot } }
+        AppActionsSheet(
+            app = app,
+            shape = shapeFor(pkg, iconOverrides, globalShape),
+            onDismiss = { actionsFor = null },
+            onAddToHome = if (pkg !in onHome) ({
+                scope.launch {
+                    val cell = findFirstFreeCell(occupiedCells(gridItems, hostedWidgets, folders), settings.pageCount, settings.rows, settings.columns)
+                    if (cell != null) repository.placeOnGrid(cell.first, cell.second, cell.third, pkg)
                 }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { addCandidate = null }) { Text("Cancel") } }
+            }) else null,
+            onAddToDock = if (dockItems.none { it.packageName == pkg } && freeDockSlot != null) ({ scope.launch { repository.placeInDock(freeDockSlot, pkg) } }) else null,
+            onHide = {
+                hiddenAppsManager.setHidden(pkg, true)
+                hiddenSet = hiddenAppsManager.getHiddenPackages()
+            }
         )
+    }
+}
+
+@Composable
+private fun DrawerIcon(app: AppInfo, sizeDp: Int, iconPackManager: IconPackManager, shape: com.auralauncher.app.data.IconShape, badge: Boolean) {
+    val packIcon = remember(app.packageName) { iconPackManager.resolveIcon(app) }
+    BadgedIcon(show = badge) {
+        if (packIcon != null) AppIconView(icon = packIcon, shape = shape, sizeDp = sizeDp, isPreShaped = true)
+        else AppIconView(icon = app.icon, shape = shape, sizeDp = sizeDp)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ShortcutResults(results: List<Pair<AppInfo, com.auralauncher.app.shortcuts.AppShortcut>>, helper: AppShortcutsHelper) {
+    Column {
+        Text("Actions", style = MaterialTheme.typography.labelMedium, color = Color.Gray, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        results.forEach { (app, shortcut) ->
+            ListItem(
+                leadingContent = {
+                    val bitmap = remember(shortcut.id) { shortcut.icon?.toBitmap(96, 96)?.asImageBitmap() }
+                    if (bitmap != null) androidx.compose.foundation.Image(BitmapPainter(bitmap), null, Modifier.size(32.dp))
+                },
+                headlineContent = { Text(shortcut.label) },
+                supportingContent = { Text(app.label, style = MaterialTheme.typography.bodySmall) },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent, headlineColor = Color.White),
+                modifier = Modifier.combinedClickable(onClick = { helper.launch(shortcut) })
+            )
+        }
+        HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Color.White.copy(alpha = 0.1f))
     }
 }
 
 @Composable
 private fun SortMenuButton(current: DrawerSortMode, onChange: (DrawerSortMode) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    IconButton(onClick = { expanded = true }) {
-        Icon(androidx.compose.material.icons.Icons.Default.Sort, contentDescription = "Sort: ${current.label}")
-    }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        DrawerSortMode.entries.forEach { mode ->
-            DropdownMenuItem(text = { Text(mode.label) }, onClick = { onChange(mode); expanded = false })
-        }
-    }
-}
-
-/** Searches page 0, then page 1, then page 2 (matching HomeScreen's PAGE_COUNT = 3)
- *  for the first empty cell, so newly added apps land wherever there's room across
- *  every page rather than only ever considering page 0. */
-fun findFirstFreeCell(occupied: List<Triple<Int, Int, Int>>): Triple<Int, Int, Int>? {
-    val occupiedSet = occupied.toSet()
-    for (page in 0 until 3) {
-        for (row in 0 until 5) {
-            for (col in 0 until 4) {
-                if (Triple(page, row, col) !in occupiedSet) return Triple(page, row, col)
+    Box {
+        IconButton(onClick = { expanded = true }) { Icon(Icons.AutoMirrored.Filled.Sort, "Sort: ${current.label}") }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DrawerSortMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(mode.label) },
+                    trailingIcon = { if (mode == current) Text("✓") },
+                    onClick = { onChange(mode); expanded = false }
+                )
             }
         }
     }
-    return null // every page full
 }
